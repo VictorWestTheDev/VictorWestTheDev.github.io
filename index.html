@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>V86 Station</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+      :root { --accent: #10b981; }
+      body { font-family: 'JetBrains Mono', monospace; overflow: hidden; }
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: #020617; }
+      ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: #475569; }
+      .crt-frame { box-shadow: 0 0 50px rgba(16, 185, 129, 0.05); border: 1px solid #1e293b; }
+      .status-dot { height: 6px; width: 6px; border-radius: 50%; display: inline-block; background-color: #ef4444; box-shadow: 0 0 5px #ef4444; transition: all 0.3s; }
+      .status-dot.ready { background-color: #10b981; box-shadow: 0 0 8px #10b981; }
+      
+      /* Scale elements naturally inside the screen wrap */
+      canvas { 
+          max-width: 100% !important; 
+          max-height: 100% !important; 
+          width: auto !important; 
+          height: auto !important; 
+          display: block; 
+          margin: auto; 
+          background: #000; 
+          image-rendering: pixelated; 
+      }
+
+      /* Fullscreen: VM only, no chrome */
+      #screen-wrapper:fullscreen { width: 100vw !important; height: 100vh !important; background: #000 !important; border: none; border-radius: 0; }
+      #screen-wrapper:fullscreen #fs-hint { display: flex !important; }
+      
+      input[type="number"]::-webkit-inner-spin-button { opacity: 1; }
+      input[type=radio] { accent-color: #10b981; }
+
+      /* Terminal Styling */
+      .term-line { display: flex; gap: 8px; }
+      .term-time { color: #64748b; font-size: 0.8em; min-width: 60px; flex-shrink: 0; }
+      .term-msg { word-break: break-all; }
+      .term-input { background: transparent; border: none; outline: none; color: #fff; width: 100%; font-family: inherit; }
+
+      .tab-btn { transition: all 0.15s; }
+      .tab-btn.active { color: #10b981; border-color: #10b981; background: rgba(16,185,129,0.08); }
+
+      .radio-card { transition: all 0.15s; cursor: pointer; }
+      .radio-card.selected { border-color: #f59e0b; background: rgba(245,158,11,0.08); }
+
+      .pulse-live { animation: pulse-live 1.5s infinite; }
+      @keyframes pulse-live { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-300 h-screen w-screen flex flex-col">
+
+  <!-- HEADER -->
+  <div class="h-11 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between px-4 shrink-0 backdrop-blur-md z-20">
+      <div class="flex items-center gap-3">
+          <h1 class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-400">V86 Station</h1>
+          <span class="text-[10px] text-slate-500 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">v3.0</span>
+      </div>
+      <div class="text-[10px] text-slate-500 flex gap-4">
+          <span class="flex items-center gap-1"><span id="engine-dot" class="w-1.5 h-1.5 bg-slate-600 rounded-full"></span> <span id="engine-status-text">ENGINE OFFLINE</span></span>
+          <span class="flex items-center gap-1"><span id="net-dot" class="w-1.5 h-1.5 bg-slate-600 rounded-full"></span> <span id="net-status-text">NET: IDLE</span></span>
+      </div>
+  </div>
+
+  <!-- MAIN GRID -->
+  <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-hidden">
+
+      <!-- SIDEBAR -->
+      <div id="sidebar-panel" class="lg:col-span-3 border-r border-slate-800 flex flex-col overflow-y-auto h-full bg-slate-900/30 relative z-10 transition-all duration-300">
+
+          <!-- Tabs -->
+          <div class="flex border-b border-slate-800 shrink-0 text-[10px] font-bold uppercase">
+              <button data-tab="files" onclick="switchTab('files')" class="tab-btn flex-1 py-2 border-b-2 border-transparent active">Files</button>
+              <button data-tab="storage" onclick="switchTab('storage')" class="tab-btn flex-1 py-2 border-b-2 border-transparent">Storage</button>
+              <button data-tab="hardware" onclick="switchTab('hardware')" class="tab-btn flex-1 py-2 border-b-2 border-transparent">Hardware</button>
+              <button data-tab="network" onclick="switchTab('network')" class="tab-btn flex-1 py-2 border-b-2 border-transparent">Network</button>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-3">
+
+              <!-- TAB: FILES -->
+              <div id="tab-files" class="tab-content flex flex-col gap-3">
+                  <div id="loader-panel" class="bg-slate-900 p-3 rounded-xl border border-slate-800 flex flex-col gap-2 relative group hover:border-blue-500/50 transition-colors">
+                      <input type="file" id="folder-input" webkitdirectory directory multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
+                      <div class="flex items-center justify-between">
+                          <div class="text-[10px] font-bold text-blue-400 uppercase flex items-center gap-1">
+                              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+                              Upload Resources
+                          </div>
+                          <div class="text-[10px] text-slate-600 bg-slate-800 px-1.5 rounded">Auto-Scan</div>
+                      </div>
+                      <div class="border-2 border-dashed border-slate-700/50 rounded-lg p-3 text-center bg-slate-800/20">
+                          <p class="text-xs font-bold text-slate-400 group-hover:text-blue-300 transition-colors">Folder Select</p>
+                          <p class="text-[9px] text-slate-500 mt-1">(libv86.js, .wasm, BIOS, VGA BIOS)</p>
+                      </div>
+                  </div>
+
+                  <!-- Status Grid -->
+                  <div class="bg-slate-900 rounded-xl border border-slate-800 p-3">
+                      <div class="text-[9px] font-bold text-slate-500 uppercase mb-2">Core Components</div>
+                      <div class="grid grid-cols-2 gap-x-2 gap-y-1.5 text-[10px] text-slate-400">
+                          <div class="flex justify-between items-center"><span>Engine (libv86)</span><span id="stat-lib" class="status-dot"></span></div>
+                          <div class="flex justify-between items-center"><span>WASM Core</span><span id="stat-wasm" class="status-dot"></span></div>
+                          <div class="flex justify-between items-center"><span>BIOS</span><span id="stat-bios" class="status-dot"></span></div>
+                          <div class="flex justify-between items-center"><span>VGA BIOS</span><span id="stat-vga" class="status-dot"></span></div>
+                          <div class="flex justify-between items-center col-span-2 border-t border-slate-800 pt-1.5 mt-0.5">
+                              <span>CD-ROM (ISO)</span><span id="stat-iso" class="status-dot"></span>
+                          </div>
+                      </div>
+                  </div>
+              </div>
+
+              <!-- TAB: STORAGE -->
+              <div id="tab-storage" class="tab-content hidden flex flex-col gap-3">
+                  <div class="bg-slate-900 rounded-xl border border-slate-800 p-3">
+                      <div class="text-[9px] font-bold text-slate-500 uppercase mb-2">Primary Drive (HDA)</div>
+                      <div class="flex flex-col gap-2">
+                          
+                          <label class="radio-card border border-slate-700 bg-slate-800/30 p-2 rounded flex items-start gap-2 hover:border-slate-500 selected" onclick="selectStorage('none')">
+                              <input type="radio" name="storage-mode" value="none" class="mt-0.5" checked>
+                              <div class="flex-1">
+                                  <div class="text-[10px] font-bold text-slate-300">No Drive / Auto-Detect</div>
+                                  <div class="text-[9px] text-slate-500 leading-tight">Boots strictly from CD/Floppy, or uses auto-detected .img from files tab.</div>
+                                  <div id="hda-current-name" class="text-[9px] text-emerald-500 mt-1 font-bold"></div>
+                              </div>
+                          </label>
+
+                          <label class="radio-card border border-slate-700 bg-slate-800/30 p-2 rounded flex items-start gap-2 hover:border-slate-500" onclick="selectStorage('ram')">
+                              <input type="radio" name="storage-mode" value="ram" class="mt-0.5">
+                              <div class="flex-1">
+                                  <div class="text-[10px] font-bold text-slate-300">Blank RAM Drive</div>
+                                  <div class="text-[9px] text-slate-500 leading-tight">Volatile storage. Lost on exit.</div>
+                                  <div class="mt-1 flex items-center gap-2 hidden" id="ram-size-input">
+                                      <input type="number" id="ram-drive-size" value="512" class="w-14 bg-slate-950 border border-slate-600 rounded px-1 py-0.5 text-[10px] text-white">
+                                      <span class="text-[9px] text-slate-400">MB</span>
+                                  </div>
+                              </div>
+                          </label>
+
+                          <label class="radio-card border border-slate-700 bg-slate-800/30 p-2 rounded flex items-start gap-2 hover:border-slate-500" onclick="selectStorage('upload')">
+                              <input type="radio" name="storage-mode" value="upload" class="mt-0.5">
+                              <div class="flex-1">
+                                  <div class="text-[10px] font-bold text-slate-300">Upload Writable Image</div>
+                                  <div class="text-[9px] text-slate-500 leading-tight">Loads entire .img into memory. (Exportable later).</div>
+                                  <div class="mt-1 hidden" id="img-upload-input">
+                                      <input type="file" id="hda-file" accept=".img" class="w-full text-[9px] text-slate-400 file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[9px] file:bg-slate-700 file:text-white">
+                                  </div>
+                              </div>
+                          </label>
+
+                          <label class="radio-card border border-slate-700 bg-slate-800/30 p-2 rounded flex items-start gap-2 hover:border-slate-500" onclick="selectStorage('fs')">
+                              <input type="radio" name="storage-mode" value="fs" class="mt-0.5">
+                              <div class="flex-1">
+                                  <div class="text-[10px] font-bold text-slate-300">Mount Local Disk (FSA API)</div>
+                                  <div class="text-[9px] text-slate-500 leading-tight">Direct read, strict writeback to local file using browser APIs.</div>
+                                  <button id="fs-mount-btn" onclick="mountFSA()" class="mt-1 hidden w-full py-1 bg-slate-700 hover:bg-slate-600 text-[9px] rounded">Select .img File...</button>
+                                  <div id="fs-mount-status" class="text-[9px] text-emerald-500 mt-1 font-bold hidden"></div>
+                              </div>
+                          </label>
+                      </div>
+                  </div>
+              </div>
+
+              <!-- TAB: NETWORK -->
+              <div id="tab-network" class="tab-content hidden flex flex-col gap-3">
+                  <div class="bg-slate-900 rounded-xl border border-slate-800 p-3">
+                      <div class="text-[9px] font-bold text-slate-500 uppercase mb-2">Relay Server</div>
+                      <input type="text" id="relay-url" value="wss://relay.widgetry.org/" class="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-xs text-white mb-2 font-mono">
+                      <p class="text-[9px] text-slate-500 leading-tight">Used for internet access (ne2k adapter). Connects via Websocket proxy.</p>
+                      <button onclick="updateRelay()" class="mt-2 w-full py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-[10px] font-bold text-slate-300 transition-colors">Apply & Reconnect</button>
+                  </div>
+              </div>
+
+              <!-- TAB: HARDWARE -->
+              <div id="tab-hardware" class="tab-content hidden flex flex-col gap-3">
+                  <div class="bg-slate-900 rounded-xl border border-slate-800 p-3">
+                      <div class="text-[9px] font-bold text-slate-500 uppercase mb-2">Hardware Setup</div>
+                      <div class="grid grid-cols-2 gap-2">
+                          <div>
+                              <label class="text-[9px] text-slate-500 block mb-1">RAM (MB)</label>
+                              <input type="number" id="ram-size" value="1024" class="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-xs text-white">
+                          </div>
+                          <div>
+                              <label class="text-[9px] text-slate-500 block mb-1">VRAM (MB)</label>
+                              <input type="number" id="vram-size" value="16" class="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-xs text-white">
+                          </div>
+                      </div>
+                      <div class="mt-2 flex gap-1">
+                          <button onclick="document.getElementById('ram-size').value=1024;document.getElementById('vram-size').value=16" class="flex-1 py-1 bg-slate-800 rounded text-[9px] hover:bg-slate-700">Android/Unix</button>
+                          <button onclick="document.getElementById('ram-size').value=2048;document.getElementById('vram-size').value=32" class="flex-1 py-1 bg-slate-800 rounded text-[9px] hover:bg-slate-700">Windows</button>
+                      </div>
+                  </div>
+              </div>
+
+          </div>
+
+          <!-- Actions Panel -->
+          <div id="actions-panel" class="p-3 border-t border-slate-800 bg-slate-900/50 shrink-0">
+              <button id="start-btn" onclick="start()" disabled class="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:shadow-[0_0_20px_rgba(16,185,129,0.6)] transition-all uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed">
+                  Boot System
+              </button>
+              
+              <div id="running-controls" class="hidden flex-col gap-2 w-full">
+                  <button onclick="saveStateStream()" class="w-full py-2 bg-blue-900/30 hover:bg-blue-800/50 text-blue-400 text-xs font-bold rounded border border-blue-800 hover:border-blue-500 transition-all flex items-center justify-center gap-2">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+                      SAVE STATE (.IMG)
+                  </button>
+                  <button id="exportDiskBtn" onclick="exportDiskImage()" class="hidden w-full py-2 bg-amber-900/30 hover:bg-amber-800/50 text-amber-400 text-xs font-bold rounded border border-amber-800 hover:border-amber-500 transition-all flex items-center justify-center gap-2">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                      EXPORT DISK (.IMG)
+                  </button>
+                  <button id="syncFsaBtn" onclick="syncFSADisk()" class="hidden w-full py-2 bg-purple-900/30 hover:bg-purple-800/50 text-purple-400 text-xs font-bold rounded border border-purple-800 hover:border-purple-500 transition-all flex items-center justify-center gap-2">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                      SYNC CHANGES TO DISK
+                  </button>
+              </div>
+          </div>
+      </div>
+
+      <!-- MAIN DISPLAY -->
+      <div id="main-panel" class="lg:col-span-9 flex flex-col relative bg-black transition-all duration-300">
+          <!-- Fullscreen Button -->
+          <button id="fs-btn" onclick="toggleFullscreen()" class="hidden absolute top-4 right-4 z-50 bg-slate-800/80 hover:bg-slate-700 text-white p-2 rounded border border-slate-600 backdrop-blur transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+          </button>
+
+          <!-- Screen Container Wrapper -->
+          <div id="screen-wrapper" class="flex-1 relative overflow-hidden crt-frame bg-black flex items-center justify-center p-3">
+              
+              <!-- Contain and visually manage native emulator layout cleanly -->
+              <div id="screen_container" class="relative z-10 shadow-2xl transition-none" style="transform-origin: center center;">
+                  
+                  <!-- Boot Animation Overlay -->
+                  <div id="awaiting-boot-overlay" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-20">
+                      <div class="relative flex justify-center items-center mb-6">
+                          <div class="absolute w-20 h-20 rounded-full border border-emerald-500/20 animate-ping"></div>
+                          <div class="w-16 h-16 rounded-full border-2 border-emerald-500/50 border-t-emerald-400 animate-spin"></div>
+                          <svg class="w-6 h-6 text-emerald-400 absolute" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                      </div>
+                      <div class="text-emerald-400 font-mono text-sm tracking-widest uppercase mb-1 drop-shadow-[0_0_5px_rgba(52,211,153,0.5)]">Awaiting Boot Sequence</div>
+                      <div class="text-slate-500 font-mono text-[10px] animate-pulse">Upload core files to initialize system</div>
+                  </div>
+                  
+                  <canvas class="hidden"></canvas>
+              </div>
+
+              <!-- Fullscreen Hint (Only visible in fullscreen via CSS) -->
+              <div id="fs-hint" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-4 py-2 rounded-full border border-slate-700 backdrop-blur z-50 font-mono">
+                  <svg class="w-4 h-4 inline mr-2 text-emerald-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                  <span id="fs-hint-text">Fullscreen Mode</span>
+              </div>
+          </div>
+
+          <!-- Terminal Overlay -->
+          <div id="terminal-panel" class="h-48 shrink-0 bg-[#0a0a0a] border-t border-slate-800 font-mono text-[11px] flex flex-col relative z-20">
+              <div class="bg-slate-900 border-b border-slate-800 px-3 py-1.5 flex justify-between items-center shrink-0">
+                  <span class="text-[9px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-2">
+                      <svg class="w-3 h-3 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M4 17h16a2 2 0 002-2V9a2 2 0 00-2-2H4a2 2 0 00-2 2v6a2 2 0 002 2z"></path></svg>
+                      Serial Console
+                  </span>
+              </div>
+              <div id="term-output" class="flex-1 overflow-y-auto p-2 flex flex-col gap-0.5"></div>
+              <div class="flex items-center gap-2 text-emerald-400 bg-slate-900/40 p-2 border-t border-slate-800/50 shrink-0">
+                  <span class="font-bold">root@v86:~#</span>
+                  <input type="text" id="term-input" class="term-input w-full bg-transparent border-none outline-none text-emerald-400 placeholder-emerald-800/60" placeholder="Type serial command..." onkeydown="if(event.key === 'Enter') sendSerialCommand()">
+              </div>
+          </div>
+      </div>
+  </div>
+
+  <script>
+      const filesDB = { lib: null, wasm: null, bios: null, vga: null, hda: null, iso: null, hdaKind: null };
+      let storageMode = 'none';
+      let localFSAHandle = null;
+      let detectedOS = null;
+      let keyboardLockActive = false;
+
+      const termOut = document.getElementById('term-output');
+      
+      function log(msg, colorClass = 'text-slate-300') {
+          const div = document.createElement('div');
+          div.className = 'term-line ' + colorClass;
+          const time = new Date().toLocaleTimeString([], {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+          div.innerHTML = `<span class="term-time">[${time}]</span> <span class="term-msg">${msg}</span>`;
+          termOut.appendChild(div);
+          termOut.scrollTop = termOut.scrollHeight;
+      }
+
+      function updateStat(id, ready) {
+          const el = document.getElementById('stat-' + id);
+          if (el) el.className = 'status-dot ' + (ready ? 'ready shadow-[0_0_8px_#10b981]' : '');
+          checkReady();
+      }
+
+      function switchTab(tabId) {
+          document.querySelectorAll('.tab-btn').forEach(b => {
+              b.classList.remove('active', 'text-accent', 'border-accent');
+              b.classList.add('border-transparent');
+          });
+          document.querySelector(`[data-tab="${tabId}"]`).classList.add('active', 'text-accent', 'border-accent');
+          document.querySelector(`[data-tab="${tabId}"]`).classList.remove('border-transparent');
+          
+          document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+          document.getElementById('tab-' + tabId).classList.remove('hidden');
+      }
+
+      function selectStorage(mode) {
+          if (mode === 'fs' && (!window.isSecureContext || !('showOpenFilePicker' in window))) {
+              return; // Block selection if unsupported
+          }
+          storageMode = mode;
+          document.querySelectorAll('.radio-card').forEach(c => c.classList.remove('selected', 'border-amber-500'));
+          document.querySelector(`input[value="${mode}"]`).parentElement.classList.add('selected', 'border-amber-500');
+          
+          document.getElementById('ram-size-input').classList.add('hidden');
+          document.getElementById('img-upload-input').classList.add('hidden');
+          document.getElementById('fs-mount-btn').classList.add('hidden');
+          
+          if (mode === 'ram') document.getElementById('ram-size-input').classList.remove('hidden');
+          if (mode === 'upload') document.getElementById('img-upload-input').classList.remove('hidden');
+          if (mode === 'fs') document.getElementById('fs-mount-btn').classList.remove('hidden');
+      }
+
+      // --- FOLDER SCANNER ---
+      document.getElementById('folder-input').addEventListener('change', (e) => {
+          const files = Array.from(e.target.files);
+          log(`Scanning ${files.length} items from directory...`);
+          
+          files.forEach(file => {
+              const name = file.name.toLowerCase();
+              
+              if (name.endsWith('.js')) { 
+                  if (!filesDB.lib || (name.includes('v86') && !filesDB.lib.name.toLowerCase().includes('v86'))) {
+                      filesDB.lib = file; updateStat('lib', true); 
+                  }
+              }
+              else if (name.endsWith('.wasm')) { 
+                  if (!filesDB.wasm || (name.includes('v86') && !filesDB.wasm.name.toLowerCase().includes('v86'))) {
+                      filesDB.wasm = file; updateStat('wasm', true); 
+                  }
+              }
+              else if (name === 'vgabios.bin') { filesDB.vga = file; updateStat('vga', true); }
+              else if (name === 'seabios.bin') { filesDB.bios = file; updateStat('bios', true); }
+              else if (name.endsWith('.img') && storageMode === 'none') {
+                  filesDB.hda = file; filesDB.hdaKind = 'auto';
+                  document.getElementById('hda-current-name').textContent = `${file.name} (auto-detected)`;
+                  log(`Detected hard drive: ${file.name}`, 'text-amber-400');
+              }
+              else if (name.endsWith('.iso')) {
+                  filesDB.iso = file; updateStat('iso', true);
+                  log(`Detected CD-ROM: ${file.name}`, 'text-purple-400');
+                  if (name.includes('android')) detectedOS = 'android';
+                  else if (name.includes('win')) detectedOS = 'windows';
+              }
+          });
+      });
+
+      function checkReady() {
+          const ready = filesDB.lib && filesDB.wasm && filesDB.bios && filesDB.vga;
+          document.getElementById('start-btn').disabled = !ready;
+          if (ready) {
+              document.getElementById('start-btn').classList.add('animate-pulse');
+              document.getElementById('engine-status-text').textContent = 'ENGINE READY';
+              document.getElementById('engine-dot').classList.replace('bg-slate-600', 'bg-emerald-500');
+          }
+      }
+
+      // --- FSA API MOUNT ---
+      async function mountFSA() {
+          try {
+              [localFSAHandle] = await window.showOpenFilePicker({
+                  types: [{ description: 'Disk Image', accept: { 'application/octet-stream': ['.img'] } }]
+              });
+              const file = await localFSAHandle.getFile();
+              filesDB.hda = file;
+              filesDB.hdaKind = 'fsa';
+              document.getElementById('fs-mount-status').classList.remove('hidden');
+              document.getElementById('fs-mount-status').textContent = `Mounted: ${file.name}`;
+              log(`FSA Mount Success: ${file.name} selected. Reads will stream directly from disk.`, 'text-emerald-400');
+          } catch (err) {
+              log('FSA Mount cancelled or failed: ' + err.message, 'text-red-500');
+          }
+      }
+
+      // --- TRUE FSA WRITE-BACK ---
+      async function syncFSADisk() {
+          if (!localFSAHandle || !window.emulator || !window.emulator.disk_images || !window.emulator.disk_images.hda) {
+              log('FSA Sync Error: No valid disk or FSA handle active.', 'text-red-500');
+              return;
+          }
+          
+          try {
+              log('Syncing in-memory disk modifications to your local file...', 'text-amber-400');
+              const hda = window.emulator.disk_images.hda;
+              let buffer;
+
+              if (typeof hda.get_buffer === 'function') {
+                  buffer = hda.get_buffer();
+              } else if (hda.buffer) {
+                  buffer = hda.buffer;
+              } else if (hda.file_data) {
+                  buffer = hda.file_data;
+              } else {
+                  throw new Error("Unable to locate modified buffer in v86 engine.");
+              }
+
+              // This uses the authentic File System Access API writable stream to push raw bytes back to the user's local disk
+              const writable = await localFSAHandle.createWritable();
+              await writable.write(buffer);
+              await writable.close();
+              
+              log('SUCCESS: Disk modifications written directly to physical disk!', 'text-emerald-400 font-bold');
+          } catch (err) {
+              log('FSA Sync Failed: ' + err.message, 'text-red-500');
+          }
+      }
+
+      // --- EXPORT DISK FUNCTION ---
+      async function exportDiskImage() {
+          if (!window.emulator || !window.emulator.disk_images || !window.emulator.disk_images.hda) {
+              log('Error: No active HDA disk available to export.', 'text-red-500');
+              return;
+          }
+          
+          try {
+              log('Extracting disk buffer from memory...', 'text-amber-400');
+              const hda = window.emulator.disk_images.hda;
+              let buffer;
+
+              if (typeof hda.get_buffer === 'function') buffer = hda.get_buffer();
+              else if (hda.buffer) buffer = hda.buffer;
+              else if (hda.file_data) buffer = hda.file_data;
+              else throw new Error("Unable to locate buffer in v86 disk object.");
+
+              const handle = await window.showSaveFilePicker({
+                  suggestedName: 'v86-disk-export.img',
+                  types: [{ description: 'Raw Disk Image', accept: { 'application/octet-stream': ['.img'] } }],
+              });
+
+              log('Streaming disk data to file...', 'text-cyan-400');
+              const writable = await handle.createWritable();
+              await writable.write(buffer);
+              await writable.close();
+              
+              log('SUCCESS: Disk exported to local file.', 'text-emerald-400 font-bold');
+          } catch (err) {
+              log('Disk export failed/cancelled: ' + err.message, 'text-red-400');
+          }
+      }
+
+      async function start() {
+          document.getElementById('running-controls').classList.remove('hidden');
+          document.getElementById('running-controls').classList.add('flex');
+          document.getElementById('fs-btn').classList.remove('hidden');
+
+          // Decide which storage actions to show
+          document.getElementById('exportDiskBtn').classList.add('hidden');
+          document.getElementById('syncFsaBtn').classList.add('hidden');
+          
+          if (storageMode === 'ram' || storageMode === 'upload') {
+              document.getElementById('exportDiskBtn').classList.remove('hidden');
+          } else if (storageMode === 'fs') {
+              document.getElementById('syncFsaBtn').classList.remove('hidden');
+          }
+
+          document.querySelector('canvas').classList.remove('hidden');
+          document.getElementById('awaiting-boot-overlay').style.display = 'none';
+
+          log('Initializing V86 Engine...', 'text-emerald-400 font-bold');
+
+          const script = document.createElement('script');
+          script.src = URL.createObjectURL(filesDB.lib);
+          document.body.appendChild(script);
+
+          script.onload = async () => {
+              log('Engine loaded. Assembling boot parameters...');
+              
+              const memSize = Math.ceil(parseInt(document.getElementById('ram-size').value) / 4) * 4;
+              const vgaSize = parseInt(document.getElementById('vram-size').value);
+
+              const config = {
+                  wasm_path: URL.createObjectURL(filesDB.wasm),
+                  memory_size: memSize * 1024 * 1024,
+                  vga_memory_size: vgaSize * 1024 * 1024,
+                  screen_container: document.getElementById('screen_container'),
+                  bios: { url: URL.createObjectURL(filesDB.bios) },
+                  vga_bios: { url: URL.createObjectURL(filesDB.vga) },
+                  autostart: true,
+                  network_relay_url: document.getElementById('relay-url').value
+              };
+
+              // Configure Primary Drive (HDA)
+              if (storageMode === 'none' && filesDB.hdaKind === 'auto') {
+                  config.hda = { url: URL.createObjectURL(filesDB.hda) };
+                  log(`Using auto-detected .img for HDA.`);
+              } else if (storageMode === 'ram') {
+                  const mb = parseInt(document.getElementById('ram-drive-size').value) || 512;
+                  config.hda = { buffer: new ArrayBuffer(mb * 1024 * 1024) };
+                  log(`Allocated ${mb}MB blank RAM drive.`);
+              } else if (storageMode === 'upload' && document.getElementById('hda-file').files[0]) {
+                  const upFile = document.getElementById('hda-file').files[0];
+                  config.hda = { url: URL.createObjectURL(upFile) };
+                  log(`Loaded uploaded image.`);
+              } else if (storageMode === 'fs' && filesDB.hdaKind === 'fsa') {
+                  log(`FSA Mount active. Reads will be lazily loaded from disk via standard Blob requests.`, 'text-amber-500');
+                  log(`NOTE: Writes occur in memory. You MUST click 'Sync Changes' to write modifications back to your local file!`, 'text-purple-400 font-bold');
+                  config.hda = { url: URL.createObjectURL(filesDB.hda) };
+              }
+
+              // Configure CD-ROM
+              if (filesDB.iso) {
+                  config.cdrom = { url: URL.createObjectURL(filesDB.iso) };
+                  log(`Mounted CD-ROM image.`);
+              }
+
+              if (detectedOS === 'windows') {
+                  config.acpi = true;
+                  config.a20_mask = true;
+                  log('Windows detected. Applying ACPI patches...', 'text-slate-400');
+              }
+
+              log('Launching V86 instance...', 'text-cyan-400');
+              
+              // --- THE MAJOR BUG FIX: RESTORING THE NATIVE CLASS INSTANTIATION AS V86 ---
+              window.emulator = new V86(config);
+
+              let currentLine = '';
+              window.emulator.add_listener('serial0-output-char', (char) => {
+                  if (char === '\n') {
+                      if (currentLine.trim()) log(`[SERIAL] ${currentLine}`, 'text-slate-400');
+                      currentLine = '';
+                  } else if (char !== '\r') {
+                      currentLine += char;
+                  }
+              });
+
+              let netTimer = setInterval(() => {
+                  if (!window.emulator.network_adapter) return;
+                  const state = window.emulator.network_adapter.bus.state;
+                  const dot = document.getElementById('net-dot');
+                  const txt = document.getElementById('net-status-text');
+                  
+                  if (state === 1) {
+                      dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-live';
+                      txt.textContent = 'NET: CONNECTED';
+                  } else {
+                      dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-500';
+                      txt.textContent = 'NET: CONNECTING...';
+                  }
+              }, 2000);
+
+              window.emulator.add_listener('emulator-ready', () => {
+                  log('SYSTEM BOOT SUCCESS.', 'text-emerald-400 font-bold');
+              });
+          };
+      }
+
+      function updateRelay() {
+          if (!window.emulator || !window.emulator.network_adapter) {
+              log('Cannot update relay: Network adapter not running.', 'text-red-400');
+              return;
+          }
+          const newUrl = document.getElementById('relay-url').value;
+          log(`Reconnecting network adapter to: ${newUrl}`, 'text-amber-400');
+          window.emulator.network_adapter.destroy();
+          window.emulator.network_adapter.connect(newUrl);
+      }
+
+      function sendSerialCommand() {
+          const input = document.getElementById('term-input');
+          if (!window.emulator) return;
+          window.emulator.serial0_send(input.value + '\n');
+          log(`> ${input.value}`, 'text-slate-500');
+          input.value = '';
+      }
+
+      // --- SAVE STATE NOW DOWNLOADS DIRECTLY AS .IMG EXTENSION ---
+      async function saveStateStream() {
+          if (!window.emulator) return;
+          log('Generating save state...', 'text-blue-400');
+          try {
+              const state = await window.emulator.save_state();
+              const blob = new Blob([state], { type: 'application/octet-stream' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'v86_state.img';
+              a.click();
+              URL.revokeObjectURL(url);
+              log('Save state successfully downloaded as v86_state.img', 'text-emerald-400 font-bold');
+          } catch(err) {
+              log('Save State Generation failed: ' + err.message, 'text-red-400');
+          }
+      }
+
+      // --- RELIABLE MOUSE INTERFACES ---
+      document.getElementById('screen-wrapper').addEventListener('click', function() {
+          if (window.emulator) {
+              window.emulator.lock_mouse();
+              log("Pointer lock activated. Press ESC to release control.", "text-emerald-500");
+          }
+      });
+
+      async function toggleFullscreen() {
+          const wrap = document.getElementById('screen-wrapper');
+          if (!document.fullscreenElement) {
+              try {
+                  await wrap.requestFullscreen();
+                  if (navigator.keyboard && navigator.keyboard.lock) {
+                      try {
+                          await navigator.keyboard.lock(['Escape']);
+                          keyboardLockActive = true;
+                          document.getElementById('fs-hint-text').textContent = 'Keyboard locked — press and hold Esc to exit fullscreen';
+                          log('Keyboard Lock active: Esc now goes to the VM instead of exiting fullscreen.', 'text-emerald-400');
+                      } catch (kErr) {
+                          document.getElementById('fs-hint-text').textContent = 'Fullscreen (keyboard lock unavailable in this browser)';
+                          log('Keyboard Lock unavailable: ' + kErr.message, 'text-amber-500');
+                      }
+                  } else {
+                      document.getElementById('fs-hint-text').textContent = 'Fullscreen (Keyboard Lock API not supported here)';
+                  }
+              } catch (err) {
+                  log('Fullscreen request failed: ' + err.message, 'text-red-500');
+              }
+          } else {
+              document.exitFullscreen();
+          }
+      }
+
+      document.addEventListener('fullscreenchange', () => {
+          if (!document.fullscreenElement) {
+              if (keyboardLockActive && navigator.keyboard && navigator.keyboard.unlock) {
+                  navigator.keyboard.unlock();
+                  keyboardLockActive = false;
+              }
+          }
+      });
+
+      // Default selection on load
+      document.querySelector('input[name="storage-mode"][value="none"]').checked = true;
+
+      // FSA API Security Check on Load
+      if (!window.isSecureContext || !('showOpenFilePicker' in window)) {
+          const fsaLabel = document.querySelector('input[value="fs"]').parentElement;
+          fsaLabel.classList.add('opacity-50', 'cursor-not-allowed');
+          fsaLabel.classList.remove('hover:border-slate-500');
+          fsaLabel.onclick = null;
+          fsaLabel.querySelector('input').disabled = true;
+          fsaLabel.querySelector('.leading-tight').innerHTML = '<span class="text-red-400 font-bold">UNAVAILABLE:</span> Requires HTTPS or localhost environment.';
+      }
+
+      // --- BULLETPROOF FLEXBOX SCALING WITH NO CUTOFF ON THE BOTTOM ---
+      const screenWrap = document.getElementById('screen-wrapper');
+      const screenCont = document.getElementById('screen_container');
+
+      function updateScreenScale() {
+          if (!screenCont || !screenWrap) return;
+          
+          const canvas = screenCont.querySelector('canvas');
+          const textLayer = Array.from(screenCont.children).find(c => c.tagName === 'DIV' && c.id !== 'awaiting-boot-overlay');
+          
+          let baseW = 640;
+          let baseH = 400;
+
+          // Find the active display layer and record its base native size
+          if (canvas && canvas.style.display !== 'none' && canvas.width > 0) {
+              baseW = canvas.width;
+              baseH = canvas.height;
+          } else if (textLayer) {
+              baseW = textLayer.offsetWidth || 640;
+              baseH = textLayer.offsetHeight || 400;
+          }
+
+          // Force the outer block to explicitly size to match the exact VM native aspect ratio
+          screenCont.style.width = baseW + 'px';
+          screenCont.style.height = baseH + 'px';
+          
+          const availW = screenWrap.clientWidth;
+          const availH = screenWrap.clientHeight;
+          
+          if (availW === 0 || availH === 0) return;
+          
+          // Calculate the visual scale, using a strict 15px bounding safe zone 
+          // (which pushes exactly 15px away from bottom and side edges of the flex frame)
+          const scale = Math.min((availW - 15) / baseW, (availH - 15) / baseH);
+          
+          if (scale > 0) {
+              screenCont.style.transform = `scale(${scale})`;
+          }
+      }
+
+      const resizeObserver = new ResizeObserver(() => {
+          requestAnimationFrame(updateScreenScale);
+      });
+      resizeObserver.observe(screenWrap);
+      
+      const mutationObserver = new MutationObserver(() => requestAnimationFrame(updateScreenScale));
+      mutationObserver.observe(screenCont, { childList: true, attributes: true, subtree: true, attributeFilter: ['width', 'height'] });
+
+      // Clean failsafe interval
+      setInterval(updateScreenScale, 500); 
+
+  </script>
+</body>
+</html>
