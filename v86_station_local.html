@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>V86 Station (Midulator v2.5)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+      body { font-family: 'JetBrains Mono', monospace; overflow: hidden; }
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: #020617; }
+      ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: #475569; }
+      .crt-frame { box-shadow: 0 0 50px rgba(16, 185, 129, 0.05); border: 1px solid #1e293b; }
+      .status-dot { height: 6px; width: 6px; border-radius: 50%; display: inline-block; background-color: #ef4444; box-shadow: 0 0 5px #ef4444; transition: all 0.3s; }
+      .status-dot.ready { background-color: #10b981; box-shadow: 0 0 8px #10b981; }
+      canvas { max-width: 100% !important; max-height: 100% !important; width: auto !important; height: auto !important; display: block; margin: auto; background: #000; }
+      :fullscreen #screen-wrapper { width: 100vw; height: 100vh; background: #000; border: none; }
+      input[type="number"]::-webkit-inner-spin-button { opacity: 1; }
+      
+      /* Terminal Styling */
+      .term-line { display: flex; gap: 8px; }
+      .term-time { color: #64748b; font-size: 0.8em; min-width: 60px; }
+      .term-msg { word-break: break-all; }
+      .term-input { background: transparent; border: none; outline: none; color: #fff; width: 100%; font-family: inherit; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-300 h-screen w-screen flex flex-col">
+
+  <!-- HEADER -->
+  <div class="h-12 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between px-4 shrink-0 backdrop-blur-md z-20">
+      <div class="flex items-center gap-3">
+          <h1 class="text-lg font-bold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-400">V86 Station</h1>
+          <span class="text-[10px] text-slate-500 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">v2.5 Pro (Local Stream)</span>
+      </div>
+      <div class="text-[10px] text-slate-500 flex gap-4">
+          <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> SYSTEM ONLINE</span>
+          <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 bg-blue-500 rounded-full"></span> NET: ENABLED</span>
+      </div>
+  </div>
+
+  <!-- MAIN GRID -->
+  <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-hidden transition-all duration-500">
+     
+      <!-- SIDEBAR -->
+      <div id="sidebar-panel" class="lg:col-span-3 bg-slate-925 border-r border-slate-800 flex flex-col overflow-y-auto h-full p-3 gap-3 bg-slate-900/30 transition-all duration-500 relative z-10">
+         
+          <!-- Smart Loader -->
+          <div id="loader-panel" class="bg-slate-900 p-3 rounded-xl border border-slate-800 flex flex-col gap-2 relative group hover:border-blue-500/50 transition-colors">
+              <input type="file" id="folder-input" webkitdirectory directory multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
+             
+              <div class="flex items-center justify-between">
+                  <div class="text-[10px] font-bold text-blue-400 uppercase flex items-center gap-1">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+                      Upload Resources
+                  </div>
+                  <div class="text-[10px] text-slate-600 bg-slate-800 px-1.5 rounded">Auto-Scan</div>
+              </div>
+             
+              <div class="border-2 border-dashed border-slate-700/50 rounded-lg p-2 text-center bg-slate-800/20">
+                  <p class="text-xs font-bold text-slate-400 group-hover:text-blue-300 transition-colors">Folder Select</p>
+                  <p class="text-[9px] text-slate-500 mt-1">(BIOS, VGA, WASM)</p>
+              </div>
+
+              <!-- MOUNT LOCAL DRIVE BUTTON -->
+              <button onclick="mountLocalDrive()" class="w-full py-2 bg-slate-800/50 hover:bg-amber-900/20 text-amber-500 text-[10px] font-bold rounded border border-amber-900/30 hover:border-amber-600 transition-all flex items-center justify-center gap-2">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
+                  MOUNT LOCAL DRIVE
+              </button>
+
+              <!-- Status Grid -->
+              <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-[9px] text-slate-500 px-1 mt-1">
+                  <div class="flex justify-between items-center"><span>Engine</span><span id="stat-lib" class="status-dot"></span></div>
+                  <div class="flex justify-between items-center"><span>WASM</span><span id="stat-wasm" class="status-dot"></span></div>
+                  <div class="flex justify-between items-center"><span>BIOS</span><span id="stat-bios" class="status-dot"></span></div>
+                  <div class="flex justify-between items-center"><span>VGA</span><span id="stat-vga" class="status-dot"></span></div>
+                  <div class="col-span-2 border-t border-slate-800 pt-1 mt-1 font-bold text-slate-400">Drives Detected:</div>
+                  <div class="col-span-2 flex justify-between items-center pl-2">
+                      <span>Hard Drive (Local)</span><span id="stat-hda" class="status-dot"></span>
+                  </div>
+                  <div class="col-span-2 flex justify-between items-center pl-2">
+                      <span>CD-ROM (.iso)</span><span id="stat-iso" class="status-dot"></span>
+                  </div>
+              </div>
+          </div>
+
+          <!-- Actions -->
+          <div id="actions-panel" class="mt-auto space-y-2 pb-1">
+              <button onclick="initEngine()" id="initBtn" disabled class="w-full py-3 bg-slate-800 text-slate-500 text-xs font-bold rounded-lg transition-all border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-700 hover:text-slate-300">
+                  WAITING FOR FILES...
+              </button>
+              
+              <div id="running-controls" class="hidden space-y-2">
+                  <!-- DIRECT STREAM SAVE BUTTON -->
+                  <button onclick="saveStateStream()" class="w-full py-2 bg-blue-900/30 hover:bg-blue-800/50 text-blue-400 text-xs font-bold rounded border border-blue-800 hover:border-blue-500 transition-all flex items-center justify-center gap-2">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+                      SAVE STATE (STREAM)
+                  </button>
+              </div>
+
+              <button onclick="start()" id="startBtn" class="hidden w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black tracking-wide rounded-lg shadow-lg shadow-emerald-900/20 transition-all text-sm animate-pulse">
+                  LAUNCH SYSTEM
+              </button>
+          </div>
+      </div>
+
+      <!-- MAIN PANEL -->
+      <div id="main-panel" class="lg:col-span-9 flex flex-col h-full bg-black p-3 gap-3 overflow-hidden transition-all duration-500">
+          <div id="screen-wrapper" class="relative flex-grow bg-slate-950 rounded-xl border border-slate-800 crt-frame overflow-hidden group flex flex-col items-center justify-center cursor-pointer" title="Click to Capture Mouse">
+              <div id="screen" class="w-full h-full flex items-center justify-center bg-black">
+                  <div class="text-center space-y-3 opacity-50">
+                      <div class="w-16 h-16 bg-slate-900 rounded-2xl mx-auto flex items-center justify-center border border-slate-800">
+                          <span class="text-2xl grayscale">⚡</span>
+                      </div>
+                      <p class="text-xs text-slate-500 font-mono">WAITING FOR BOOT...</p>
+                  </div>
+              </div>
+          </div>
+
+          <!-- BOTTOM TOOLBAR -->
+          <div class="h-32 shrink-0 flex gap-3">
+              <!-- Config Panel -->
+              <div id="config-panel" class="w-56 bg-slate-950 rounded-lg border border-slate-800 p-2 flex flex-col shadow-inner">
+                  <div class="flex justify-between items-center border-b border-slate-800 pb-1 mb-1">
+                      <div class="text-[10px] font-bold text-purple-400 uppercase flex items-center gap-1">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
+                          Hardware
+                      </div>
+                      <div class="flex gap-1">
+                          <button onclick="setPreset('android')" class="text-[8px] bg-slate-800 hover:bg-emerald-900 text-emerald-400 px-1.5 rounded border border-slate-700">ANDROID</button>
+                          <button onclick="setPreset('win')" class="text-[8px] bg-slate-800 hover:bg-blue-900 text-blue-400 px-1.5 rounded border border-slate-700">WINDOWS</button>
+                      </div>
+                  </div>
+                 
+                  <div class="space-y-1">
+                      <div class="flex justify-between items-center bg-slate-900/50 p-1 rounded">
+                          <label class="text-[9px] text-slate-500 pl-1">RAM</label>
+                          <div class="flex items-center">
+                              <input type="number" id="ram" value="1024" class="w-12 bg-transparent text-right text-xs text-blue-400 font-bold outline-none border-b border-transparent hover:border-blue-500 focus:border-blue-500 transition-colors">
+                              <span class="text-[8px] text-slate-600 ml-1">MB</span>
+                          </div>
+                      </div>
+                      <div class="flex justify-between items-center bg-slate-900/50 p-1 rounded">
+                          <label class="text-[9px] text-slate-500 pl-1">VRAM</label>
+                          <div class="flex items-center">
+                              <input type="number" id="vram" value="32" class="w-12 bg-transparent text-right text-xs text-purple-400 font-bold outline-none border-b border-transparent hover:border-purple-500 focus:border-purple-500 transition-colors">
+                              <span class="text-[8px] text-slate-600 ml-1">MB</span>
+                          </div>
+                      </div>
+                  </div>
+              </div>
+
+              <!-- ENHANCED TERMINAL -->
+              <div class="flex-1 bg-slate-950 rounded-lg border border-slate-800 p-2 font-mono text-[10px] overflow-hidden flex flex-col shadow-inner relative">
+                  <div id="logs" class="flex-1 overflow-y-auto pb-6 space-y-0.5">
+                      <div class="term-line"><span class="term-time">[SYSTEM]</span><span class="term-msg text-emerald-500">Ready. Upload files or Mount Drive.</span></div>
+                  </div>
+                  <!-- Input Line -->
+                  <div class="absolute bottom-0 left-0 right-0 bg-slate-900/90 border-t border-slate-800 p-1.5 flex gap-2 items-center">
+                      <span class="text-emerald-500 font-bold">></span>
+                      <input type="text" id="term-input" class="term-input" placeholder="Serial Command Input..." onkeydown="handleTermInput(event)">
+                  </div>
+              </div>
+          </div>
+      </div>
+  </div>
+
+  <script>
+      const filesDB = { lib: null, wasm: null, bios: null, vga: null, iso: null, hda: null };
+      let wasmUrl = null;
+      let detectedOS = 'unknown';
+      let localDiskHandle = null; // Store handle globally to keep permission active
+
+      // --- Config Persistence ---
+      window.addEventListener('load', () => {
+          const savedRam = localStorage.getItem('v86_ram');
+          const savedVram = localStorage.getItem('v86_vram');
+          if(savedRam) document.getElementById('ram').value = savedRam;
+          if(savedVram) document.getElementById('vram').value = savedVram;
+      });
+
+      function setPreset(type) {
+          if(type === 'android') {
+              document.getElementById('ram').value = 1024;
+              document.getElementById('vram').value = 32;
+              log('Applied Preset: Android (1GB)', 'text-emerald-400');
+          } else if (type === 'win') {
+              document.getElementById('ram').value = 2048;
+              document.getElementById('vram').value = 16;
+              log('Applied Preset: Windows (2GB Safe Mode)', 'text-blue-400');
+          }
+          localStorage.setItem('v86_ram', document.getElementById('ram').value);
+          localStorage.setItem('v86_vram', document.getElementById('vram').value);
+      }
+
+      document.getElementById('ram').addEventListener('change', (e) => localStorage.setItem('v86_ram', e.target.value));
+      document.getElementById('vram').addEventListener('change', (e) => localStorage.setItem('v86_vram', e.target.value));
+
+      function readFileAsBuffer(file) {
+          return new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = (e) => resolve(e.target.result);
+              reader.onerror = (e) => reject(new Error("File Read Error"));
+              reader.readAsArrayBuffer(file);
+          });
+      }
+
+      // --- ENHANCED LOGGING ---
+      function log(msg, colorClass = 'text-slate-400') {
+          const logs = document.getElementById('logs');
+          const line = document.createElement('div');
+          line.className = 'term-line';
+          
+          const now = new Date();
+          const timeStr = `[${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}]`;
+          
+          let finalColor = colorClass;
+          if(msg.toLowerCase().includes('error') || msg.toLowerCase().includes('fail')) finalColor = 'text-red-400';
+          else if(msg.toLowerCase().includes('warning')) finalColor = 'text-amber-400';
+          else if(msg.toLowerCase().includes('success')) finalColor = 'text-emerald-400';
+
+          line.innerHTML = `<span class="term-time">${timeStr}</span><span class="term-msg ${finalColor}">${msg}</span>`;
+          logs.appendChild(line);
+          logs.scrollTop = logs.scrollHeight;
+      }
+
+      function handleTermInput(e) {
+          if (e.key === 'Enter') {
+              const input = document.getElementById('term-input');
+              const cmd = input.value;
+              if (window.emulator && cmd) {
+                  window.emulator.serial0_send(cmd + "\n");
+                  log(`SENT: ${cmd}`, 'text-slate-500');
+                  input.value = '';
+              }
+          }
+      }
+
+      // --- FILE SYSTEM ACCESS API (LOCAL MOUNT & STREAM SAVE) ---
+      async function mountLocalDrive() {
+          try {
+              if ('showOpenFilePicker' in window) {
+                  const [handle] = await window.showOpenFilePicker({
+                      types: [{ description: 'Disk Images', accept: { 'application/octet-stream': ['.img', '.iso'] } }],
+                      multiple: false
+                  });
+                  
+                  localDiskHandle = handle; // Store handle to prevent bubble loss
+                  
+                  // Request RW immediately to prep for saving later
+                  await localDiskHandle.requestPermission({ mode: 'readwrite' });
+                  
+                  const file = await localDiskHandle.getFile();
+                  filesDB.hda = file; 
+                  
+                  updateStat('hda', true);
+                  log(`Mounted: ${file.name} (Ready for Stream Save)`, 'text-amber-400');
+                  checkReadiness();
+              } else {
+                  log('Error: Browser does not support FS Access.', 'text-red-500');
+              }
+          } catch (err) {
+              log(`Mount Cancelled: ${err.message}`, 'text-slate-500');
+          }
+      }
+
+      // --- CRITICAL UPDATE: STREAMING SAVE ---
+      // This bypasses the browser's RAM limit for downloads by writing chunks directly to disk
+      async function saveStateStream() {
+          if(!window.emulator) return;
+          log('Capturing System State (This may take a moment)...', 'text-blue-400');
+          
+          window.emulator.save_state(async (error, new_state) => {
+              if (error) {
+                  log('Capture Error: ' + error.message, 'text-red-500');
+                  return;
+              }
+
+              try {
+                  log('State Captured. Select destination for 5GB+ file...', 'text-amber-400');
+                  
+                  // Open Native Save Prompt
+                  const handle = await window.showSaveFilePicker({
+                      suggestedName: 'v86-state-backup.bin',
+                      types: [{
+                          description: 'V86 State File',
+                          accept: { 'application/octet-stream': ['.bin'] },
+                      }],
+                  });
+                  
+                  log('Streaming data to disk...', 'text-cyan-400');
+                  const writable = await handle.createWritable();
+                  
+                  // Write directly to disk (No blob RAM crash)
+                  await writable.write(new_state);
+                  await writable.close();
+                  
+                  log('SUCCESS: State saved to disk.', 'text-emerald-400 font-bold');
+                  
+              } catch (fsErr) {
+                  log('Save Cancelled/Failed: ' + fsErr.message, 'text-red-400');
+              }
+          });
+      }
+
+      // --- STANDARD SCANNER ---
+      document.getElementById('folder-input').addEventListener('change', function(e) {
+          const files = Array.from(e.target.files);
+          if(files.length === 0) return;
+          log(`Scanning ${files.length} files...`, 'text-blue-400');
+          
+          detectedOS = 'unknown';
+
+          files.forEach(file => {
+              const name = file.name.toLowerCase();
+              if(name.endsWith('.js') && (name.includes('libv86') || name.includes('v86'))) { filesDB.lib = file; updateStat('lib', true); }
+              else if(name.endsWith('.wasm')) { filesDB.wasm = file; updateStat('wasm', true); }
+              else if(name.includes('vgabios') || (name.includes('vga') && name.endsWith('.bin'))) { filesDB.vga = file; updateStat('vga', true); }
+              else if((name.includes('seabios') || name.includes('bios')) && name.endsWith('.bin') && !name.includes('vga')) { filesDB.bios = file; updateStat('bios', true); }
+              else if(name.endsWith('.img') && !name.includes('iso')) {
+                  // Only overwrite if not manually mounted
+                  if(!filesDB.hda) {
+                      filesDB.hda = file; updateStat('hda', true);
+                      log(`Detected Hard Drive: ${file.name}`, 'text-amber-400');
+                  }
+              }
+              else if(name.endsWith('.iso') || name.endsWith('.img')) {
+                  filesDB.iso = file; updateStat('iso', true);
+                  log(`Detected CD-ROM: ${file.name}`, 'text-purple-400');
+                  if (name.includes('android')) detectedOS = 'android';
+                  else if (name.includes('win')) detectedOS = 'windows';
+              }
+          });
+          checkReadiness();
+      });
+
+      function updateStat(id, ready) {
+          const el = document.getElementById(`stat-${id}`);
+          if(ready) el.classList.add('ready'); else el.classList.remove('ready');
+      }
+
+      function checkReadiness() {
+          const btn = document.getElementById('initBtn');
+          if(filesDB.lib && filesDB.wasm && filesDB.bios && filesDB.vga) {
+              btn.disabled = false;
+              btn.innerText = "INITIALIZE ENGINE";
+              btn.classList.remove('text-slate-500');
+              btn.classList.add('text-slate-300');
+              log('Core components verified.', 'text-emerald-500');
+          }
+      }
+
+      function initEngine() {
+          if(!filesDB.lib || !filesDB.wasm) return;
+          log('Injecting V86 Core...', 'text-blue-400');
+          wasmUrl = URL.createObjectURL(filesDB.wasm);
+          const reader = new FileReader();
+          reader.onload = e => {
+              const code = 'var global=window;window.module={exports:{}};window.exports=window.module.exports;window.define=undefined;\n' + e.target.result + '\nif(window.module.exports.V86Starter)window.V86Starter=window.module.exports.V86Starter;else if(window.module.exports.V86)window.V86Starter=window.module.exports.V86;else window.V86Starter=window.module.exports;';
+              try {
+                  const script = document.createElement('script');
+                  script.text = code;
+                  document.body.appendChild(script);
+                  setTimeout(() => {
+                      if(typeof V86Starter !== 'undefined') {
+                          log('Engine Online.', 'text-emerald-400 font-bold');
+                          document.getElementById('startBtn').classList.remove('hidden');
+                          document.getElementById('initBtn').classList.add('hidden');
+                      } else log('Injection failed.', 'text-red-500');
+                  }, 500);
+              } catch(err) { log('Init Error: ' + err.message, 'text-red-500'); }
+          };
+          reader.readAsText(filesDB.lib);
+      }
+
+      async function start() {
+          if(!filesDB.bios || !filesDB.vga) { log('Missing BIOS/VGA.', 'text-red-500'); return; }
+          
+          document.getElementById('sidebar-panel').classList.add('hidden');
+          document.getElementById('main-panel').classList.remove('lg:col-span-9');
+          document.getElementById('main-panel').classList.add('lg:col-span-12');
+          document.getElementById('running-controls').classList.remove('hidden'); // Show Save button
+         
+          const screen = document.getElementById('screen');
+          screen.innerHTML = '<div style="white-space:pre;font:14px monospace;color:#fff"></div><canvas style="display:block;width:100%;height:100%;background:#000"></canvas>';
+         
+          let ramVal = parseInt(document.getElementById('ram').value);
+          if (detectedOS === 'windows' && ramVal > 2048) {
+              log(`Auto-Clamp: RAM ${ramVal}MB -> 2048MB`, 'text-yellow-500');
+              ramVal = 2048;
+          }
+
+          log(`Booting System (${ramVal}MB RAM)...`, 'text-cyan-400');
+
+          try {
+              const biosBuffer = await readFileAsBuffer(filesDB.bios);
+              const vgaBuffer = await readFileAsBuffer(filesDB.vga);
+
+              const config = {
+                  wasm_path: wasmUrl,
+                  memory_size: ramVal * 1024 * 1024,
+                  vga_memory_size: parseInt(document.getElementById('vram').value) * 1024 * 1024,
+                  screen_container: screen,
+                  bios: { buffer: biosBuffer },
+                  vga_bios: { buffer: vgaBuffer },
+                  net_device: {
+                      type: "ne2k",
+                      relay_url: "wss://improved-robot-g4vw4qjp6964f9gq-8080.app.github.dev/"
+                  },
+                  autostart: true,
+                  fast_boot: true
+              };
+
+              if(filesDB.hda) {
+                  config.hda = { buffer: filesDB.hda }; // Works for File objects too
+                  config.boot_order = 0x312; 
+              } else {
+                  config.boot_order = 0x213;
+              }
+
+              if(filesDB.iso) config.cdrom = { buffer: filesDB.iso };
+
+              if (detectedOS === 'windows') {
+                  config.acpi = true;
+                  config.a20_mask = true;
+              }
+
+              window.emulator = new V86Starter(config);
+
+              // Serial Pipe
+              let serialBuffer = "";
+              window.emulator.add_listener("serial0-output-char", function(char) {
+                 if(char === '\r' || char === '\n') {
+                     if(serialBuffer.trim().length > 0) {
+                         log("[SERIAL] " + serialBuffer, "text-gray-500");
+                         serialBuffer = "";
+                     }
+                 } else {
+                     serialBuffer += char;
+                 }
+              });
+
+              document.getElementById('screen-wrapper').addEventListener('click', function() {
+                  if(window.emulator) {
+                      window.emulator.lock_mouse();
+                      log("Mouse Locked. Press ESC to release.", "text-emerald-500");
+                  }
+              });
+
+              log('VM Started successfully.', 'text-white');
+          } catch(e) {
+              log('CRASH: ' + e.message, 'text-red-500 font-bold');
+          }
+      }
+
+      function toggleFullscreen() {
+          const elem = document.getElementById("screen-wrapper");
+          if (!document.fullscreenElement) elem.requestFullscreen().catch(err => console.log(err));
+          else document.exitFullscreen();
+      }
+  </script>
+</body>
+</html>
