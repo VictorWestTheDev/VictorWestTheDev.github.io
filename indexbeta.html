@@ -659,13 +659,15 @@
                   } else {
                       const fsaFileSizeMB = (fsaDiskSize / 1024 / 1024).toFixed(2);
                       log(`FSA Mount active: ${filesDB.hda.name} (${fsaFileSizeMB}MB)`, 'text-emerald-400');
-                      log(`Reads will be lazily loaded from disk via Blob requests.`, 'text-amber-500');
+                      log(`Loading mounted disk into V86 memory for read/write support...`, 'text-amber-500');
                       log(`IMPORTANT: Writes occur in memory. Click 'Sync Changes' to persist!`, 'text-purple-400 font-bold');
                       try {
-                          config.hda = { url: URL.createObjectURL(filesDB.hda) };
+                          const fileBuffer = await filesDB.hda.arrayBuffer();
+                          config.hda = { buffer: fileBuffer };
                           storageConfigured = true;
+                          log(`FSA disk loaded into VM memory (${fsaFileSizeMB}MB).`, 'text-emerald-400');
                       } catch (err) {
-                          log(`ERROR: Failed to create Blob URL for FSA file: ${err.message}`, 'text-red-500');
+                          log(`ERROR: Failed to load FSA file into buffer: ${err.message}`, 'text-red-500');
                       }
                   }
               }
