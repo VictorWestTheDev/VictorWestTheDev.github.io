@@ -276,6 +276,8 @@
       const filesDB = { lib: null, wasm: null, bios: null, vga: null, hda: null, iso: null, hdaKind: null };
       let storageMode = 'none';
       let localFSAHandle = null;
+      let fsaHandleValid = false;
+      let fsaDiskSize = 0;
       let detectedOS = null;
       let keyboardLockActive = false;
 
@@ -376,14 +378,66 @@
                   types: [{ description: 'Disk Image', accept: { 'application/octet-stream': ['.img'] } }]
               });
               const file = await localFSAHandle.getFile();
+              fsaDiskSize = file.size;
               filesDB.hda = file;
               filesDB.hdaKind = 'fsa';
+              fsaHandleValid = true;
               document.getElementById('fs-mount-status').classList.remove('hidden');
-              document.getElementById('fs-mount-status').textContent = `Mounted: ${file.name}`;
-              log(`FSA Mount Success: ${file.name} selected. Reads will stream directly from disk.`, 'text-emerald-400');
+              document.getElementById('fs-mount-status').textContent = `Mounted: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+              log(`FSA Mount Success: ${file.name} selected (${(file.size / 1024 / 1024).toFixed(2)} MB). Reads will stream directly from disk.`, 'text-emerald-400');
           } catch (err) {
-              log('FSA Mount cancelled or failed: ' + err.message, 'text-red-500');
+              fsaHandleValid = false;
+              if (err.name !== 'AbortError') {
+                  log('FSA Mount failed: ' + err.message, 'text-red-500');
+              }
           }
+      }
+
+      // --- VALIDATE FSA HANDLE ---
+      async function validateFSAHandle() {
+          if (!localFSAHandle) return false;
+          try {
+              const file = await localFSAHandle.getFile();
+              return file !== null;
+          } catch (err) {
+              fsaHandleValid = false;
+              log('FSA handle became invalid: ' + err.message, 'text-red-500');
+              return false;
+          }
+      }
+
+      // --- REQUEST FSA WRITE PERMISSION ---
+      async function requestFSAWritePermission() {
+          if (!localFSAHandle) return false;
+          try {
+              const permission = await localFSAHandle.requestPermission({ mode: 'readwrite' });
+              if (permission !== 'granted') {
+                  log('Write permission denied by user', 'text-amber-400');
+                  return false;
+              }
+              return true;
+          } catch (err) {
+              log('Permission request failed: ' + err.message, 'text-red-500');
+              return false;
+          }
+      }
+
+      // --- DETECT v86 BUFFER METHOD ---
+      function detectv86Buffer(hda) {
+          if (typeof hda.get_buffer === 'function') {
+              log('Detected v86 buffer method: get_buffer()', 'text-cyan-400');
+              return hda.get_buffer();
+          } else if (hda.buffer instanceof ArrayBuffer) {
+              log('Detected v86 buffer method: .buffer property', 'text-cyan-400');
+              return hda.buffer;
+          } else if (hda.file_data instanceof ArrayBuffer) {
+              log('Detected v86 buffer method: .file_data property', 'text-cyan-400');
+              return hda.file_data;
+          } else if (ArrayBuffer.isView(hda.buffer)) {
+              log('Detected v86 buffer method: typed array view', 'text-cyan-400');
+              return hda.buffer.buffer;
+          }
+          throw new Error('No valid buffer found on v86 disk object');
       }
 
       // --- TRUE FSA WRITE-BACK ---
@@ -394,28 +448,58 @@
           }
           
           try {
-              log('Syncing in-memory disk modifications to your local file...', 'text-amber-400');
+              log('Pre-sync validation...', 'text-blue-400');
+              
+              // Step 1: Validate handle is still accessible
+              if (!await validateFSAHandle()) {
+                  log('FSA handle validation failed. Remount the disk.', 'text-red-500');
+                  return;
+              }
+              
+              // Step 2: Request write permission
+              if (!await requestFSAWritePermission()) {
+                  log('Cannot proceed without write permission.', 'text-red-500');
+                  return;
+              }
+              
+              log('Extracting disk buffer from emulator...', 'text-blue-400');
               const hda = window.emulator.disk_images.hda;
               let buffer;
-
-              if (typeof hda.get_buffer === 'function') {
-                  buffer = hda.get_buffer();
-              } else if (hda.buffer) {
-                  buffer = hda.buffer;
-              } else if (hda.file_data) {
-                  buffer = hda.file_data;
-              } else {
-                  throw new Error("Unable to locate modified buffer in v86 engine.");
+              
+              // Step 3: Intelligently detect buffer method
+              try {
+                  buffer = detectv86Buffer(hda);
+              } catch (bufErr) {
+                  log('Buffer detection failed: ' + bufErr.message, 'text-red-500');
+                  return;
               }
-
-              // This uses the authentic File System Access API writable stream to push raw bytes back to the user's local disk
+              
+              if (!buffer || !(buffer instanceof ArrayBuffer)) {
+                  log('ERROR: Extracted buffer is not a valid ArrayBuffer', 'text-red-500');
+                  return;
+              }
+              
+              const bufferSize = buffer.byteLength;
+              log(`Buffer size: ${(bufferSize / 1024 / 1024).toFixed(2)} MB (original disk: ${(fsaDiskSize / 1024 / 1024).toFixed(2)} MB)`, 'text-cyan-400');
+              
+              // Step 4: Verify buffer matches original disk size
+              if (bufferSize !== fsaDiskSize) {
+                  log(`WARNING: Buffer size (${bufferSize}) doesn't match disk size (${fsaDiskSize}). Proceeding anyway...`, 'text-amber-400');
+              }
+              
+              log('Syncing in-memory disk modifications to your local file...', 'text-amber-400');
+              
+              // Step 5: Stream to disk using FSA writable stream
               const writable = await localFSAHandle.createWritable();
               await writable.write(buffer);
               await writable.close();
               
               log('SUCCESS: Disk modifications written directly to physical disk!', 'text-emerald-400 font-bold');
           } catch (err) {
-              log('FSA Sync Failed: ' + err.message, 'text-red-500');
+              log(`FSA Sync Failed: ${err.name} - ${err.message}`, 'text-red-500');
+              if (err.message.includes('NotAllowedError')) {
+                  log('Tip: User may have denied permission or handle expired. Try remounting the disk.', 'text-amber-400');
+              }
           }
       }
 
@@ -431,13 +515,23 @@
               const hda = window.emulator.disk_images.hda;
               let buffer;
 
-              if (typeof hda.get_buffer === 'function') buffer = hda.get_buffer();
-              else if (hda.buffer) buffer = hda.buffer;
-              else if (hda.file_data) buffer = hda.file_data;
-              else throw new Error("Unable to locate buffer in v86 disk object.");
+              try {
+                  buffer = detectv86Buffer(hda);
+              } catch (bufErr) {
+                  log('Buffer detection failed: ' + bufErr.message, 'text-red-500');
+                  return;
+              }
+              
+              if (!buffer || !(buffer instanceof ArrayBuffer)) {
+                  log('ERROR: Extracted buffer is not a valid ArrayBuffer', 'text-red-500');
+                  return;
+              }
+              
+              const bufferSize = buffer.byteLength;
+              log(`Exporting buffer: ${(bufferSize / 1024 / 1024).toFixed(2)} MB`, 'text-cyan-400');
 
               const handle = await window.showSaveFilePicker({
-                  suggestedName: 'v86-disk-export.img',
+                  suggestedName: `v86_disk_${new Date().toISOString().split('T')[0]}.img`,
                   types: [{ description: 'Raw Disk Image', accept: { 'application/octet-stream': ['.img'] } }],
               });
 
@@ -448,7 +542,9 @@
               
               log('SUCCESS: Disk exported to local file.', 'text-emerald-400 font-bold');
           } catch (err) {
-              log('Disk export failed/cancelled: ' + err.message, 'text-red-400');
+              if (err.name !== 'AbortError') {
+                  log(`Disk export failed: ${err.name} - ${err.message}`, 'text-red-500');
+              }
           }
       }
 
@@ -479,8 +575,20 @@
           script.onload = async () => {
               log('Engine loaded. Assembling boot parameters...');
               
-              const memSize = Math.ceil(parseInt(document.getElementById('ram-size').value) / 4) * 4;
-              const vgaSize = parseInt(document.getElementById('vram-size').value);
+              // Safely parse system RAM size (in MB)
+              const ramMB = parseInt(document.getElementById('ram-size').value);
+              if (isNaN(ramMB) || ramMB < 16) {
+                  log('ERROR: Invalid RAM size. Using default 1024MB', 'text-red-500');
+                  var memSize = 1024;
+              } else {
+                  var memSize = ramMB;
+              }
+              log(`System RAM: ${memSize}MB`, 'text-cyan-400');
+              
+              // Safely parse VRAM size
+              const vramMB = parseInt(document.getElementById('vram-size').value);
+              const vgaSize = (isNaN(vramMB) || vramMB < 1) ? 16 : vramMB;
+              log(`Video RAM: ${vgaSize}MB`, 'text-cyan-400');
 
               const config = {
                   wasm_path: URL.createObjectURL(filesDB.wasm),
@@ -493,22 +601,77 @@
                   network_relay_url: document.getElementById('relay-url').value
               };
 
+              log(`Config: ${JSON.stringify({memory_size: config.memory_size / 1024 / 1024 + 'MB', vga_memory_size: config.vga_memory_size / 1024 / 1024 + 'MB', storageMode})}`, 'text-slate-400');
+
               // Configure Primary Drive (HDA)
+              let storageConfigured = false;
               if (storageMode === 'none' && filesDB.hdaKind === 'auto') {
-                  config.hda = { url: URL.createObjectURL(filesDB.hda) };
-                  log(`Using auto-detected .img for HDA.`);
+                  if (filesDB.hda) {
+                      config.hda = { url: URL.createObjectURL(filesDB.hda) };
+                      log(`Using auto-detected .img for HDA.`, 'text-emerald-400');
+                      storageConfigured = true;
+                  } else {
+                      log('ERROR: No auto-detected drive available!', 'text-red-500');
+                  }
               } else if (storageMode === 'ram') {
-                  const mb = parseInt(document.getElementById('ram-drive-size').value) || 512;
-                  config.hda = { buffer: new ArrayBuffer(mb * 1024 * 1024) };
-                  log(`Allocated ${mb}MB blank RAM drive.`);
-              } else if (storageMode === 'upload' && document.getElementById('hda-file').files[0]) {
-                  const upFile = document.getElementById('hda-file').files[0];
-                  config.hda = { url: URL.createObjectURL(upFile) };
-                  log(`Loaded uploaded image.`);
+                  const driveSize = parseInt(document.getElementById('ram-drive-size').value) || 512;
+                  if (isNaN(driveSize) || driveSize < 1) {
+                      log('ERROR: Invalid RAM drive size. Using 512MB', 'text-red-500');
+                      var finalDriveSize = 512;
+                  } else {
+                      var finalDriveSize = driveSize;
+                  }
+                  try {
+                      log(`Creating ${finalDriveSize}MB blank RAM drive...`, 'text-blue-400');
+                      config.hda = { buffer: new ArrayBuffer(finalDriveSize * 1024 * 1024) };
+                      log(`Successfully allocated ${finalDriveSize}MB RAM drive.`, 'text-emerald-400');
+                      storageConfigured = true;
+                  } catch (err) {
+                      log(`ERROR: Failed to allocate RAM drive: ${err.message}`, 'text-red-500');
+                      log('Falling back to 256MB RAM drive...', 'text-amber-400');
+                      try {
+                          config.hda = { buffer: new ArrayBuffer(256 * 1024 * 1024) };
+                          log('Fallback 256MB RAM drive created.', 'text-emerald-400');
+                          storageConfigured = true;
+                      } catch (fallErr) {
+                          log(`CRITICAL: Cannot allocate any RAM drive: ${fallErr.message}`, 'text-red-500');
+                      }
+                  }
+              } else if (storageMode === 'upload') {
+                  const fileInput = document.getElementById('hda-file');
+                  if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+                      log('ERROR: No upload file selected! Please select an .img file.', 'text-red-500');
+                  } else {
+                      const upFile = fileInput.files[0];
+                      const fileSizeMB = (upFile.size / 1024 / 1024).toFixed(2);
+                      log(`Loading uploaded image: ${upFile.name} (${fileSizeMB}MB)...`, 'text-blue-400');
+                      try {
+                          config.hda = { url: URL.createObjectURL(upFile) };
+                          log(`Upload mode configured: ${upFile.name}`, 'text-emerald-400');
+                          storageConfigured = true;
+                      } catch (err) {
+                          log(`ERROR: Failed to load upload file: ${err.message}`, 'text-red-500');
+                      }
+                  }
               } else if (storageMode === 'fs' && filesDB.hdaKind === 'fsa') {
-                  log(`FSA Mount active. Reads will be lazily loaded from disk via standard Blob requests.`, 'text-amber-500');
-                  log(`NOTE: Writes occur in memory. You MUST click 'Sync Changes' to write modifications back to your local file!`, 'text-purple-400 font-bold');
-                  config.hda = { url: URL.createObjectURL(filesDB.hda) };
+                  if (!filesDB.hda || !fsaHandleValid) {
+                      log('ERROR: FSA handle not properly mounted. Please remount the disk.', 'text-red-500');
+                  } else {
+                      const fsaFileSizeMB = (fsaDiskSize / 1024 / 1024).toFixed(2);
+                      log(`FSA Mount active: ${filesDB.hda.name} (${fsaFileSizeMB}MB)`, 'text-emerald-400');
+                      log(`Reads will be lazily loaded from disk via Blob requests.`, 'text-amber-500');
+                      log(`IMPORTANT: Writes occur in memory. Click 'Sync Changes' to persist!`, 'text-purple-400 font-bold');
+                      try {
+                          config.hda = { url: URL.createObjectURL(filesDB.hda) };
+                          storageConfigured = true;
+                      } catch (err) {
+                          log(`ERROR: Failed to create Blob URL for FSA file: ${err.message}`, 'text-red-500');
+                      }
+                  }
+              }
+
+              if (!storageConfigured) {
+                  log('WARNING: No storage device configured. System may boot without HDA.', 'text-amber-400');
               }
 
               // Configure CD-ROM
